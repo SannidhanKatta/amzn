@@ -68,6 +68,15 @@ class AmazonTVScraper:
             chrome_options.add_argument("--no-sandbox")
             chrome_options.add_argument("--disable-dev-shm-usage")
             chrome_options.add_argument("--window-size=1920,1080")
+            # Add these new options for containerized environment
+            chrome_options.add_argument("--disable-extensions")
+            chrome_options.add_argument("--disable-setuid-sandbox")
+            chrome_options.add_argument("--remote-debugging-port=9222")
+            chrome_options.add_argument("--disable-dev-tools")
+            chrome_options.add_argument("--single-process")
+            chrome_options.add_argument("--disable-features=VizDisplayCompositor")
+            chrome_options.add_argument("--ignore-certificate-errors")
+            chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
             
             # Simplified driver setup
             service = Service()
@@ -75,6 +84,7 @@ class AmazonTVScraper:
                 
         except Exception as e:
             print(f"Error setting up Chrome driver: {str(e)}")
+            traceback.print_exc()  # Add this to get more detailed error information
             print("\nTo fix this, please follow these steps:")
             print("1. Open Command Prompt as Administrator")
             print("2. Run these commands:")
