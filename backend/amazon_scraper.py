@@ -19,6 +19,7 @@ import sys
 import platform
 import subprocess
 import traceback
+import undetected_chromedriver as uc
 
 class AmazonTVScraper:
     def __init__(self):
@@ -37,21 +38,16 @@ class AmazonTVScraper:
                 for path in paths:
                     if os.path.exists(path):
                         try:
-                            # Try using powershell instead of wmic
+                            # Try using powershell to get version
                             command = f'powershell -command "(Get-Item \'{path}\').VersionInfo.FileVersion"'
                             output = subprocess.check_output(command, shell=True)
                             version = output.decode('utf-8').strip()
                             if version:
-                                return version
+                                # Extract major version number
+                                major_version = version.split('.')[0]
+                                return major_version
                         except:
-                            try:
-                                # Fallback to reading version file
-                                version_file = os.path.join(os.path.dirname(path), 'VERSION')
-                                if os.path.exists(version_file):
-                                    with open(version_file, 'r') as f:
-                                        return f.read().strip()
-                            except:
-                                continue
+                            continue
                 
                 print("Chrome executable found but couldn't determine version.")
                 return None
@@ -62,104 +58,169 @@ class AmazonTVScraper:
 
     def setup_driver(self):
         try:
-            chrome_options = Options()
-            chrome_options.add_argument("--headless=new")
-            chrome_options.add_argument("--disable-gpu")
-            chrome_options.add_argument("--no-sandbox")
-            chrome_options.add_argument("--disable-dev-shm-usage")
-            chrome_options.add_argument("--window-size=1920,1080")
-            # Add these new options for containerized environment
-            chrome_options.add_argument("--disable-extensions")
-            chrome_options.add_argument("--disable-setuid-sandbox")
-            chrome_options.add_argument("--remote-debugging-port=9222")
-            chrome_options.add_argument("--disable-dev-tools")
-            chrome_options.add_argument("--single-process")
-            chrome_options.add_argument("--disable-features=VizDisplayCompositor")
-            chrome_options.add_argument("--ignore-certificate-errors")
-            chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+            print("Setting up Chrome driver...")
             
-            # Simplified driver setup
-            service = Service()
-            self.driver = webdriver.Chrome(service=service, options=chrome_options)
+            # Check if we're in the deployed environment
+            is_deployed = os.getenv('DEPLOYED', 'false').lower() == 'true'
+            
+            if platform.system() == 'Windows':
+                # Local Windows environment
+                print("Detected Windows environment...")
+                options = uc.ChromeOptions()
+                options.add_argument('--headless')  # Enable headless mode
+                options.add_argument('--disable-gpu')
+                options.add_argument('--disable-software-rasterizer')
+                options.add_argument('--window-size=1920,1080')
+                options.add_argument('--disable-notifications')
+                options.add_argument(f'--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+                
+                try:
+                    print("Initializing undetected-chromedriver...")
+                    self.driver = uc.Chrome(options=options)
+                    print("Chrome driver initialized successfully")
+                except Exception as e:
+                    print(f"Error initializing undetected-chromedriver: {str(e)}")
+                    raise
+            else:
+                # Linux/Deployed environment
+                chrome_options = Options()
+                chrome_options.add_argument('--no-sandbox')
+                chrome_options.add_argument('--disable-dev-shm-usage')
+                chrome_options.add_argument('--disable-gpu')
+                chrome_options.add_argument('--headless=new')  # Ensure headless mode is enabled
+                chrome_options.add_argument('--disable-dev-tools')
+                chrome_options.add_argument('--no-zygote')
+                chrome_options.add_argument('--single-process')
+                chrome_options.add_argument('--window-size=1920,1080')
+                chrome_options.add_argument('--ignore-certificate-errors')
+                chrome_options.add_argument('--disable-notifications')
+                chrome_options.add_argument(f'--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+                
+                chromedriver_path = os.getenv('CHROMEDRIVER_PATH', '/usr/local/bin/chromedriver')
+                if os.path.exists(chromedriver_path):
+                    print(f"Using ChromeDriver from path: {chromedriver_path}")
+                    service = Service(executable_path=chromedriver_path)
+                else:
+                    print("ChromeDriver not found in path, installing using webdriver_manager...")
+                    service = Service(ChromeDriverManager().install())
+                
+                print("Initializing Chrome driver...")
+                self.driver = webdriver.Chrome(service=service, options=chrome_options)
+            
+            # Set timeouts
+            self.driver.set_page_load_timeout(30)
+            self.driver.implicitly_wait(10)
+            return True
                 
         except Exception as e:
             print(f"Error setting up Chrome driver: {str(e)}")
-            traceback.print_exc()  # Add this to get more detailed error information
-            print("\nTo fix this, please follow these steps:")
-            print("1. Open Command Prompt as Administrator")
-            print("2. Run these commands:")
-            print("   pip uninstall selenium webdriver-manager")
-            print("   pip install selenium==4.18.1 webdriver-manager==4.0.1")
-            print("3. Download ChromeDriver manually:")
-            print("   - Go to https://chromedriver.chromium.org/downloads")
-            print("   - Download the version that matches your Chrome version")
-            print("   - Extract chromedriver.exe to your project folder")
-            print("4. Then run the script again")
-            sys.exit(1)
-        
+            traceback.print_exc()
+            raise Exception(f"Failed to initialize Chrome driver: {str(e)}")
+
     def get_page_content(self, url):
         try:
+            print(f"Loading URL: {url}")
             self.driver.get(url)
+            
             # Wait for the main product content to load
-            WebDriverWait(self.driver, 10).until(
+            WebDriverWait(self.driver, 20).until(
                 EC.presence_of_element_located((By.ID, "productTitle"))
             )
-            # Scroll to load all dynamic content
-            self.scroll_page()
-            return self.driver.page_source
+            
+            # Additional wait for dynamic content
+            time.sleep(3)
+            
+            # Get page source
+            page_source = self.driver.page_source
+            
+            if not page_source or len(page_source) < 1000:  # Basic validation
+                print("Retrieved page source is too short or empty")
+                raise Exception("Retrieved page source is too short or empty")
+                
+            print(f"Successfully retrieved page content with length: {len(page_source)}")
+            return page_source
+            
+        except WebDriverException as e:
+            print(f"WebDriverException occurred: {str(e)}")
+            if 'no such window' in str(e):
+                print("Browser window was closed unexpectedly. Reinitializing driver...")
+                self.setup_driver()
+                return self.get_page_content(url)
+            else:
+                raise
         except Exception as e:
             print(f"Error loading page: {e}")
-            return None
+            raise
 
     def scroll_page(self):
-        # Scroll slowly to load all dynamic content
-        last_height = self.driver.execute_script("return document.body.scrollHeight")
-        while True:
-            self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(2)
-            new_height = self.driver.execute_script("return document.body.scrollHeight")
-            if new_height == last_height:
-                break
-            last_height = new_height
+        try:
+            # Scroll slowly to load all dynamic content
+            last_height = self.driver.execute_script("return document.body.scrollHeight")
+            retries = 3
+            
+            while retries > 0:
+                # Scroll down
+                self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                
+                # Wait for content to load
+                time.sleep(2)
+                
+                # Calculate new scroll height
+                new_height = self.driver.execute_script("return document.body.scrollHeight")
+                
+                if new_height == last_height:
+                    break
+                    
+                last_height = new_height
+                retries -= 1
+                
+        except Exception as e:
+            print(f"Error during page scroll: {str(e)}")
+            # Don't raise the exception, just log it
+            pass
 
     def extract_product_details(self, url):
-        page_content = self.get_page_content(url)
-        if not page_content:
-            return None
-        
-        soup = BeautifulSoup(page_content, 'lxml')
-        product_data = {}
-        
-        # Product Name
-        product_data['product_name'] = self._get_product_name(soup)
-        
-        # Rating and Number of Ratings
-        rating_info = self._get_rating_info(soup)
-        product_data.update(rating_info)
-        
-        # Price Information
-        price_info = self._get_price_info(soup)
-        product_data.update(price_info)
-        
-        # Bank Offers
-        product_data['bank_offers'] = self._get_bank_offers(soup)
-        
-        # About this item
-        product_data['about_this_item'] = self._get_about_this_item(soup)
-        
-        # Product Information
-        product_data['product_information'] = self._get_product_information(soup)
-        
-        # Product Images
-        product_data['product_images'] = self._get_product_images(soup)
-        
-        # Manufacturer Images
-        product_data['manufacturer_images'] = self._get_manufacturer_images(soup)
-        
-        # Generate AI Review Summary based on collected data
-        product_data['ai_review_summary'] = self._generate_ai_review_summary(product_data)
-        
-        return product_data
+        try:
+            page_content = self.get_page_content(url)
+            if not page_content:
+                return None
+            
+            soup = BeautifulSoup(page_content, 'lxml')
+            product_data = {}
+            
+            # Product Name
+            product_data['product_name'] = self._get_product_name(soup)
+            
+            # Rating and Number of Ratings
+            rating_info = self._get_rating_info(soup)
+            product_data.update(rating_info)
+            
+            # Price Information
+            price_info = self._get_price_info(soup)
+            product_data.update(price_info)
+            
+            # Bank Offers
+            product_data['bank_offers'] = self._get_bank_offers(soup)
+            
+            # About this item
+            product_data['about_this_item'] = self._get_about_this_item(soup)
+            
+            # Product Information
+            product_data['product_information'] = self._get_product_information(soup)
+            
+            # Product Images
+            product_data['product_images'] = self._get_product_images(soup)
+            
+            # Manufacturer Images
+            product_data['manufacturer_images'] = self._get_manufacturer_images(soup)
+            
+            # Generate AI Review Summary based on collected data
+            product_data['ai_review_summary'] = self._generate_ai_review_summary(product_data)
+            
+            return product_data
+        except Exception as e:
+            print(f"Scraping error: {str(e)}")
+            raise
 
     def _get_product_name(self, soup):
         try:
